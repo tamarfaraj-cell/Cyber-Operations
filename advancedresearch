@@ -1,0 +1,97 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression, SGDClassifier  
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.metrics import (accuracy_score, confusion_matrix,
+                             precision_recall_curve, auc)
+from imblearn.over_sampling import SMOTE
+import os
+
+USE_SMOTE = True
+
+
+def run_full_analysis(file_path, dataset_name):
+    print(f"\n---  Speed-Optimized Analysis: {dataset_name} ---")
+
+    df = pd.read_csv(file_path)
+    df = df.replace([np.inf, -np.inf], np.nan).dropna()
+
+    if len(df) > 10000:
+        print(f"Subsampling {dataset_name} to 10,000 rows for speed...")
+        df = df.sample(10000, random_state=42)
+
+    X = df.select_dtypes(include=[np.number])
+    y_binary = np.where(df.iloc[:, -1].astype(str).str.contains('Benign|Normal|recon', case=False, na=False), 0, 1)
+
+    if USE_SMOTE and len(np.unique(y_binary)) > 1:
+        smote = SMOTE(random_state=42)
+        X_res, y_res = smote.fit_resample(X, y_binary)
+    else:
+        X_res, y_res = X, y_binary
+
+    X_train, X_test, y_train, y_test = train_test_split(X_res, y_res, test_size=0.2, random_state=42)
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    models = {
+        "Random Forest": RandomForestClassifier(n_estimators=30, random_state=42),
+        "Decision Tree": DecisionTreeClassifier(random_state=42),
+        "Logistic Regression": LogisticRegression(max_iter=500),
+        "Fast SVM": SGDClassifier(loss='modified_huber', random_state=42),
+        "KNN": KNeighborsClassifier(n_neighbors=5, n_jobs=-1)  
+    }
+
+    model_metrics = {}
+    fig_cm, axes_cm = plt.subplots(1, 5, figsize=(25, 5))
+    plt.figure(figsize=(10, 7))
+
+    for i, (name, clf) in enumerate(models.items()):
+        print(f"Training {name}...")
+        clf.fit(X_train_scaled, y_train)
+
+        preds = clf.predict(X_test_scaled)
+
+if hasattr(clf, "predict_proba"):
+            probs = clf.predict_proba(X_test_scaled)[:, 1]
+        else:
+            probs = clf.decision_function(X_test_scaled)
+
+        acc = accuracy_score(y_test, preds)
+        cv_scores = cross_val_score(clf, X_train_scaled, y_train, cv=10)
+        precision, recall, _ = precision_recall_curve(y_test, probs)
+        pr_auc = auc(recall, precision)
+
+        model_metrics[name] = {'acc': acc, 'cv': cv_scores, 'pr_auc': pr_auc}
+
+        plt.plot(recall, precision, label=f'{name} (AP={pr_auc:.3f})')
+        cm = confusion_matrix(y_test, preds)
+        sns.heatmap(cm, annot=True, fmt='d', cmap='viridis', ax=axes_cm[i], cbar=False)
+        axes_cm[i].set_title(f'{name}')
+
+    plt.legend()
+    plt.savefig(f'{dataset_name}_Fast_PR.png')
+    plt.show()
+
+    fig_cm.savefig(f'{dataset_name}_Fast_CM.png')
+    plt.show()
+
+    print(f" Results for {dataset_name} finished in minutes, not hours.")
+
+
+datasets = {
+    "ROSIDS": "datasets/ROSIDS23.csv",
+    "UAV": "datasets/UAVAttackData 4(in).csv",
+    "CIC2017": "datasets/CICIDS2017 4(in).csv",
+    "IoT2025": "datasets/CICIIoTdataset2025 4(in).csv"
+}
+
+for name, path in datasets.items():
+    if os.path.exists(path):
+        run_full_analysis(path, name)
